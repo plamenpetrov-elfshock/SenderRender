@@ -116,7 +116,9 @@ app.get('/', (req, res) => {
         <style>
             body { font-family: Arial, sans-serif; background: #f4f4f9; padding: 20px; }
             .container { max-width: 800px; margin: auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
-            h1 { color: #333; text-align: center; }
+            .header { display: flex; align-items: center; justify-content: center; margin-bottom: 20px; }
+            h1 { color: #333; margin: 0; }
+            .badge { background-color: #007bff; color: white; padding: 5px 12px; border-radius: 15px; font-size: 14px; margin-left: 15px; }
             .toolbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; padding-bottom: 10px; border-bottom: 1px solid #ddd; }
             .toolbar-left { display: flex; align-items: center; gap: 10px; }
             .toolbar-actions button { margin-left: 5px; }
@@ -134,7 +136,10 @@ app.get('/', (req, res) => {
     </head>
     <body>
         <div class="container">
-            <h1>Shared Files</h1>
+            <div class="header">
+                <h1>Shared Files</h1>
+                <span id="fileCount" class="badge">0 files</span>
+            </div>
             
             <div class="toolbar">
                 <div class="toolbar-left">
@@ -151,6 +156,11 @@ app.get('/', (req, res) => {
         </div>
 
         <script>
+            // Helper to update the counter badge
+            function updateFileCount(count) {
+                document.getElementById('fileCount').innerText = count + (count === 1 ? ' file' : ' files');
+            }
+
             async function loadFiles() {
                 try {
                     const response = await fetch('/api/files');
@@ -158,6 +168,9 @@ app.get('/', (req, res) => {
                     const files = await response.json();
                     const fileList = document.getElementById('fileList');
                     
+                    // Update the counter immediately
+                    updateFileCount(files.length);
+
                     if (files.length === 0) {
                         fileList.innerHTML = '<p class="empty">No files uploaded yet.</p>';
                         return;
@@ -178,6 +191,7 @@ app.get('/', (req, res) => {
                     ).join('');
                 } catch (error) {
                     document.getElementById('fileList').innerHTML = '<p class="empty">Error loading files. Check Render logs.</p>';
+                    updateFileCount(0);
                 }
             }
 
@@ -191,13 +205,21 @@ app.get('/', (req, res) => {
                 return Array.from(checkboxes);
             }
 
+            // Recount visible files in the DOM
+            function recountVisibleFiles() {
+                const visibleCards = document.querySelectorAll('.file-card').length;
+                updateFileCount(visibleCards);
+            }
+
             async function deleteFile(fileName) {
                 if (!confirm('Are you sure you want to delete ' + fileName + '?')) return;
                 
                 try {
                     const response = await fetch('/api/files/' + encodeURIComponent(fileName), { method: 'DELETE' });
                     if (response.ok) {
-                        document.getElementById('card-' + encodeURIComponent(fileName)).style.display = 'none';
+                        const card = document.getElementById('card-' + encodeURIComponent(fileName));
+                        if (card) card.remove(); // Remove from DOM entirely
+                        recountVisibleFiles(); // Update counter
                     } else {
                         alert('Failed to delete file.');
                     }
@@ -223,9 +245,10 @@ app.get('/', (req, res) => {
                     if (response.ok) {
                         selected.forEach(cb => {
                             const card = document.getElementById('card-' + encodeURIComponent(cb.value));
-                            if (card) card.remove();
+                            if (card) card.remove(); // Remove from DOM entirely
                         });
                         document.getElementById('selectAll').checked = false;
+                        recountVisibleFiles(); // Update counter
                     } else {
                         alert('Failed to delete files.');
                     }
@@ -238,7 +261,6 @@ app.get('/', (req, res) => {
                 const selected = getSelectedFiles();
                 if (selected.length === 0) return alert('Please select at least one file to download.');
 
-                // Trigger download for each selected file with a slight delay
                 selected.forEach((cb, index) => {
                     setTimeout(() => {
                         const url = cb.dataset.url;
@@ -248,7 +270,7 @@ app.get('/', (req, res) => {
                         document.body.appendChild(a);
                         a.click();
                         document.body.removeChild(a);
-                    }, index * 300); // 300ms delay between downloads to prevent browser blocking
+                    }, index * 300);
                 });
             }
 
