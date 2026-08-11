@@ -16,6 +16,9 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 // Configure Multer to store file in memory
 const upload = multer({ storage: multer.memoryStorage() });
 
+// Need this to parse JSON bodies for bulk delete
+app.use(express.json());
+
 // --- MIDDLEWARE ---
 const authenticateUpload = (req, res, next) => {
   if (req.headers['x-api-key'] !== API_KEY) {
@@ -73,13 +76,28 @@ app.get('/api/files', async (req, res) => {
   }
 });
 
-// 3. Endpoint to DELETE a file
+// 3. Endpoint to DELETE a single file
 app.delete('/api/files/:filename', async (req, res) => {
   try {
     const fileName = decodeURIComponent(req.params.filename);
     const { error } = await supabase.storage.from(BUCKET_NAME).remove([fileName]);
     
     if (error) throw error;
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 4. Endpoint to DELETE multiple files (Bulk)
+app.post('/api/files/bulk-delete', async (req, res) => {
+  try {
+    const { filenames } = req.body;
+    if (!Array.isArray(filenames)) return res.status(400).json({ error: 'Invalid payload' });
+
+    const { error } = await supabase.storage.from(BUCKET_NAME).remove(filenames);
+    if (error) throw error;
+    
     res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -99,18 +117,36 @@ app.get('/', (req, res) => {
             body { font-family: Arial, sans-serif; background: #f4f4f9; padding: 20px; }
             .container { max-width: 800px; margin: auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
             h1 { color: #333; text-align: center; }
+            .toolbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; padding-bottom: 10px; border-bottom: 1px solid #ddd; }
+            .toolbar-left { display: flex; align-items: center; gap: 10px; }
+            .toolbar-actions button { margin-left: 5px; }
             .file-card { border: 1px solid #ddd; padding: 15px; margin-bottom: 10px; border-radius: 5px; display: flex; justify-content: space-between; align-items: center; }
+            .file-info { display: flex; align-items: center; gap: 10px; }
             .file-info strong { font-size: 16px; color: #0056b3; word-break: break-all; }
             .btn { padding: 8px 15px; text-decoration: none; border-radius: 4px; color: white; font-size: 14px; margin-left: 5px; border: none; cursor: pointer; }
             .btn-preview { background: #6c757d; }
             .btn-download { background: #007bff; }
             .btn-delete { background: #dc3545; }
+            .btn-bulk-delete { background: #dc3545; }
+            .btn-bulk-download { background: #28a745; }
             .empty { text-align: center; color: #777; margin-top: 30px; }
         </style>
     </head>
     <body>
         <div class="container">
             <h1>Shared Files</h1>
+            
+            <div class="toolbar">
+                <div class="toolbar-left">
+                    <input type="checkbox" id="selectAll" onchange="toggleSelectAll(this)">
+                    <label for="selectAll">Select All</label>
+                </div>
+                <div class="toolbar-actions">
+                    <button class="btn btn-bulk-download" onclick="bulkDownload()">Download Selected</button>
+                    <button class="btn btn-bulk-delete" onclick="bulkDelete()">Delete Selected</button>
+                </div>
+            </div>
+
             <div id="fileList"><p class="empty">Loading files...</p></div>
         </div>
 
@@ -130,6 +166,7 @@ app.get('/', (req, res) => {
                     fileList.innerHTML = files.map(file => 
                         '<div class="file-card" id="card-' + encodeURIComponent(file.name) + '">' +
                             '<div class="file-info">' +
+                                '<input type="checkbox" class="file-checkbox" value="' + file.name + '" data-url="' + file.url + '">' +
                                 '<strong>' + file.name + '</strong>' +
                             '</div>' +
                             '<div class="actions">' +
@@ -144,24 +181,77 @@ app.get('/', (req, res) => {
                 }
             }
 
+            function toggleSelectAll(source) {
+                const checkboxes = document.querySelectorAll('.file-checkbox');
+                checkboxes.forEach(cb => cb.checked = source.checked);
+            }
+
+            function getSelectedFiles() {
+                const checkboxes = document.querySelectorAll('.file-checkbox:checked');
+                return Array.from(checkboxes);
+            }
+
             async function deleteFile(fileName) {
                 if (!confirm('Are you sure you want to delete ' + fileName + '?')) return;
                 
                 try {
-                    const response = await fetch('/api/files/' + encodeURIComponent(fileName), {
-                        method: 'DELETE'
-                    });
-                    
+                    const response = await fetch('/api/files/' + encodeURIComponent(fileName), { method: 'DELETE' });
                     if (response.ok) {
-                        // Hide the card immediately upon successful deletion
                         document.getElementById('card-' + encodeURIComponent(fileName)).style.display = 'none';
                     } else {
                         alert('Failed to delete file.');
                     }
                 } catch (error) {
-                    alert('Error deleting file: ' + error.message);
+                    alert('Error: ' + error.message);
                 }
             }
+
+            async function bulkDelete() {
+                const selected = getSelectedFiles();
+                if (selected.length === 0) return alert('Please select at least one file to delete.');
+                if (!confirm('Delete ' + selected.length + ' selected files?')) return;
+
+                const filenames = selected.map(cb => cb.value);
+                
+                try {
+                    const response = await fetch('/api/files/bulk-delete', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ filenames: filenames })
+                    });
+
+                    if (response.ok) {
+                        selected.forEach(cb => {
+                            const card = document.getElementById('card-' + encodeURIComponent(cb.value));
+                            if (card) card.remove();
+                        });
+                        document.getElementById('selectAll').checked = false;
+                    } else {
+                        alert('Failed to delete files.');
+                    }
+                } catch (error) {
+                    alert('Error: ' + error.message);
+                }
+            }
+
+            function bulkDownload() {
+                const selected = getSelectedFiles();
+                if (selected.length === 0) return alert('Please select at least one file to download.');
+
+                // Trigger download for each selected file with a slight delay
+                selected.forEach((cb, index) => {
+                    setTimeout(() => {
+                        const url = cb.dataset.url;
+                        const a = document.createElement('a');
+                        a.href = url;
+                        a.download = cb.value;
+                        document.body.appendChild(a);
+                        a.click();
+                        document.body.removeChild(a);
+                    }, index * 300); // 300ms delay between downloads to prevent browser blocking
+                });
+            }
+
             loadFiles();
         </script>
     </body>
