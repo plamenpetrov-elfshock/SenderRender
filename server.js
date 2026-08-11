@@ -13,7 +13,7 @@ const API_KEY = process.env.UPLOAD_KEY || 'dev-only-key';
 // Initialize Supabase
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
-// Configure Multer to store file in memory (NOT on disk)
+// Configure Multer to store file in memory
 const upload = multer({ storage: multer.memoryStorage() });
 
 // --- MIDDLEWARE ---
@@ -30,11 +30,9 @@ const authenticateUpload = (req, res, next) => {
 app.post('/upload', authenticateUpload, upload.single('file'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file received' });
 
-  // Create a unique filename
-  const fileName = `${Date.now()}-${req.file.originalname}`;
+  const fileName = `${Date.now()}-${req.file.originalname.replace(/\s+/g, '_')}`;
   
   try {
-    // Upload to Supabase
     const { data, error } = await supabase
       .storage
       .from(BUCKET_NAME)
@@ -57,13 +55,11 @@ app.get('/api/files', async (req, res) => {
     const { data, error } = await supabase.storage.from(BUCKET_NAME).list();
     if (error) throw error;
 
-    // Sort newest first (Supabase lists oldest first by default)
     const sortedFiles = data.reverse();
 
     const fileData = sortedFiles
-      .filter(file => file.name !== '.emptyFolderPlaceholder') // Ignore placeholder
+      .filter(file => file.name !== '.emptyFolderPlaceholder')
       .map(file => {
-        // Get public URL for preview/download
         const { data: urlData } = supabase.storage.from(BUCKET_NAME).getPublicUrl(file.name);
         return {
           name: file.name,
@@ -79,7 +75,7 @@ app.get('/api/files', async (req, res) => {
 
 // --- FRONTEND (HTML UI) ---
 app.get('/', (req, res) => {
-  res.send(`
+  const html = `
     <!DOCTYPE html>
     <html lang="en">
     <head>
@@ -108,6 +104,7 @@ app.get('/', (req, res) => {
             async function loadFiles() {
                 try {
                     const response = await fetch('/api/files');
+                    if (!response.ok) throw new Error('Network response was not ok');
                     const files = await response.json();
                     const fileList = document.getElementById('fileList');
                     
@@ -116,27 +113,30 @@ app.get('/', (req, res) => {
                         return;
                     }
 
-                    fileList.innerHTML = files.map(file => \`
-                        <div class="file-card">
-                            <div class="file-info">
-                                <strong>\${file.name}</strong>
-                            </div>
-                            <div class="actions">
-                                <a href="\${file.url}" target="_blank" class="btn btn-preview">Preview</a>
-                                <a href="\${file.url}" download="\${file.name}" class="btn btn-download">Download</a>
-                            </div>
-                        </div>
-                    \`).join('');
+                    fileList.innerHTML = files.map(file => 
+                        '<div class="file-card">' +
+                            '<div class="file-info">' +
+                                '<strong>' + file.name + '</strong>' +
+                            '</div>' +
+                            '<div class="actions">' +
+                                '<a href="' + file.url + '" target="_blank" class="btn btn-preview">Preview</a>' +
+                                '<a href="' + file.url + '" download="' + file.name + '" class="btn btn-download">Download</a>' +
+                            '</div>' +
+                        '</div>'
+                    ).join('');
                 } catch (error) {
-                    document.getElementById('fileList').innerHTML = '<p class="empty">Error loading files.</p>';
+                    document.getElementById('fileList').innerHTML = '<p class="empty">Error loading files. Check if Supabase keys are set in Render.</p>';
                 }
             }
             loadFiles();
         </script>
     </body>
     </html>
-  `);
+  `;
+  
+  res.send(html);
 });
 
+// Start server
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
