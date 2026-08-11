@@ -1,13 +1,14 @@
 {
   "name": "render-file-server",
   "version": "1.0.0",
-  "description": "Upload files via PowerShell and preview/download them",
+  "description": "Upload files via PowerShell to Supabase and render on free tier",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
   },
   "dependencies": {
     "express": "^4.19.2",
-    "multer": "^1.4.5-lts.1"
+    "multer": "^1.4.5-lts.1",
+    "@supabase/supabase-js": "^2.45.4"
   }
 }

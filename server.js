@@ -1,33 +1,22 @@
 const express = require('express');
 const multer = require('multer');
-const path = require('path');
-const fs = require('fs');
+const { createClient } = require('@supabase/supabase-js');
 
 const app = express();
 
 // --- CONFIGURATION ---
-// Use the Render Persistent Disk mount path, or a local 'uploads' folder for testing
-const UPLOAD_DIR = process.env.UPLOAD_DIR || './uploads';
-const API_KEY = process.env.UPLOAD_KEY || 'dev-only-key'; 
+const SUPABASE_URL = process.env.SUPABASE_URL;
+const SUPABASE_KEY = process.env.SUPABASE_KEY;
+const BUCKET_NAME = 'uploads';
+const API_KEY = process.env.UPLOAD_KEY || 'dev-only-key';
 
-// Ensure the upload directory exists
-if (!fs.existsSync(UPLOAD_DIR)) {
-  fs.mkdirSync(UPLOAD_DIR, { recursive: true });
-}
+// Initialize Supabase
+const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
-// Configure Multer (File upload engine)
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, UPLOAD_DIR),
-  filename: (req, file, cb) => {
-    // Add timestamp to prevent overwriting files with the same name
-    const uniqueSuffix = Date.now() + '-';
-    cb(null, uniqueSuffix + file.originalname);
-  }
-});
-const upload = multer({ storage });
+// Configure Multer to store file in memory (NOT on disk)
+const upload = multer({ storage: multer.memoryStorage() });
 
 // --- MIDDLEWARE ---
-// Authentication middleware for the upload endpoint
 const authenticateUpload = (req, res, next) => {
   if (req.headers['x-api-key'] !== API_KEY) {
     return res.status(401).json({ error: 'Unauthorized: Invalid API Key' });
@@ -38,51 +27,54 @@ const authenticateUpload = (req, res, next) => {
 // --- API ROUTES ---
 
 // 1. Endpoint to receive files from PowerShell
-app.post('/upload', authenticateUpload, upload.single('file'), (req, res) => {
+app.post('/upload', authenticateUpload, upload.single('file'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file received' });
-  res.json({ 
-    ok: true, 
-    filename: req.file.filename,
-    size: req.file.size
-  });
+
+  // Create a unique filename
+  const fileName = `${Date.now()}-${req.file.originalname}`;
+  
+  try {
+    // Upload to Supabase
+    const { data, error } = await supabase
+      .storage
+      .from(BUCKET_NAME)
+      .upload(fileName, req.file.buffer, {
+        contentType: req.file.mimetype,
+        upsert: false
+      });
+
+    if (error) throw error;
+    
+    res.json({ ok: true, filename: fileName });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // 2. Endpoint to list files for the web UI
-app.get('/api/files', (req, res) => {
-  fs.readdir(UPLOAD_DIR, (err, files) => {
-    if (err) return res.status(500).json({ error: 'Cannot read directory' });
-    
-    const fileData = files.map(name => {
-      const stats = fs.statSync(path.join(UPLOAD_DIR, name));
-      return {
-        name,
-        size: (stats.size / 1024).toFixed(2) + ' KB', // Convert to KB
-        uploadDate: stats.mtime
-      };
-    });
-    
-    // Sort newest first
-    fileData.sort((a, b) => new Date(b.uploadDate) - new Date(a.uploadDate));
+app.get('/api/files', async (req, res) => {
+  try {
+    const { data, error } = await supabase.storage.from(BUCKET_NAME).list();
+    if (error) throw error;
+
+    // Sort newest first (Supabase lists oldest first by default)
+    const sortedFiles = data.reverse();
+
+    const fileData = sortedFiles
+      .filter(file => file.name !== '.emptyFolderPlaceholder') // Ignore placeholder
+      .map(file => {
+        // Get public URL for preview/download
+        const { data: urlData } = supabase.storage.from(BUCKET_NAME).getPublicUrl(file.name);
+        return {
+          name: file.name,
+          url: urlData.publicUrl
+        };
+      });
+
     res.json(fileData);
-  });
-});
-
-// 3. Endpoint to download a file
-app.get('/download/:filename', (req, res) => {
-  const safeFilename = path.basename(req.params.filename); // Prevent path traversal attacks
-  const filePath = path.join(UPLOAD_DIR, safeFilename);
-  
-  if (!fs.existsSync(filePath)) return res.status(404).send('File not found');
-  res.download(filePath);
-});
-
-// 4. Endpoint to preview a file inline (images, PDFs, text)
-app.get('/preview/:filename', (req, res) => {
-  const safeFilename = path.basename(req.params.filename);
-  const filePath = path.join(UPLOAD_DIR, safeFilename);
-  
-  if (!fs.existsSync(filePath)) return res.status(404).send('File not found');
-  res.sendFile(filePath);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // --- FRONTEND (HTML UI) ---
@@ -100,7 +92,6 @@ app.get('/', (req, res) => {
             h1 { color: #333; text-align: center; }
             .file-card { border: 1px solid #ddd; padding: 15px; margin-bottom: 10px; border-radius: 5px; display: flex; justify-content: space-between; align-items: center; }
             .file-info strong { font-size: 16px; color: #0056b3; }
-            .file-info small { color: #666; display: block; margin-top: 5px; }
             .btn { padding: 8px 15px; text-decoration: none; border-radius: 4px; color: white; font-size: 14px; margin-left: 5px; }
             .btn-preview { background: #6c757d; }
             .btn-download { background: #007bff; }
@@ -129,11 +120,10 @@ app.get('/', (req, res) => {
                         <div class="file-card">
                             <div class="file-info">
                                 <strong>\${file.name}</strong>
-                                <small>Size: \${file.size} | Uploaded: \${new Date(file.uploadDate).toLocaleString()}</small>
                             </div>
                             <div class="actions">
-                                <a href="/preview/\${file.name}" target="_blank" class="btn btn-preview">Preview</a>
-                                <a href="/download/\${file.name}" class="btn btn-download">Download</a>
+                                <a href="\${file.url}" target="_blank" class="btn btn-preview">Preview</a>
+                                <a href="\${file.url}" download="\${file.name}" class="btn btn-download">Download</a>
                             </div>
                         </div>
                     \`).join('');
@@ -148,6 +138,5 @@ app.get('/', (req, res) => {
   `);
 });
 
-// Start server
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(\`Server running on port \${PORT}\`));
