@@ -73,6 +73,19 @@ app.get('/api/files', async (req, res) => {
   }
 });
 
+// 3. Endpoint to DELETE a file
+app.delete('/api/files/:filename', async (req, res) => {
+  try {
+    const fileName = decodeURIComponent(req.params.filename);
+    const { error } = await supabase.storage.from(BUCKET_NAME).remove([fileName]);
+    
+    if (error) throw error;
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // --- FRONTEND (HTML UI) ---
 app.get('/', (req, res) => {
   const html = `
@@ -87,10 +100,11 @@ app.get('/', (req, res) => {
             .container { max-width: 800px; margin: auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
             h1 { color: #333; text-align: center; }
             .file-card { border: 1px solid #ddd; padding: 15px; margin-bottom: 10px; border-radius: 5px; display: flex; justify-content: space-between; align-items: center; }
-            .file-info strong { font-size: 16px; color: #0056b3; }
-            .btn { padding: 8px 15px; text-decoration: none; border-radius: 4px; color: white; font-size: 14px; margin-left: 5px; }
+            .file-info strong { font-size: 16px; color: #0056b3; word-break: break-all; }
+            .btn { padding: 8px 15px; text-decoration: none; border-radius: 4px; color: white; font-size: 14px; margin-left: 5px; border: none; cursor: pointer; }
             .btn-preview { background: #6c757d; }
             .btn-download { background: #007bff; }
+            .btn-delete { background: #dc3545; }
             .empty { text-align: center; color: #777; margin-top: 30px; }
         </style>
     </head>
@@ -114,18 +128,38 @@ app.get('/', (req, res) => {
                     }
 
                     fileList.innerHTML = files.map(file => 
-                        '<div class="file-card">' +
+                        '<div class="file-card" id="card-' + encodeURIComponent(file.name) + '">' +
                             '<div class="file-info">' +
                                 '<strong>' + file.name + '</strong>' +
                             '</div>' +
                             '<div class="actions">' +
                                 '<a href="' + file.url + '" target="_blank" class="btn btn-preview">Preview</a>' +
                                 '<a href="' + file.url + '" download="' + file.name + '" class="btn btn-download">Download</a>' +
+                                '<button class="btn btn-delete" onclick="deleteFile(\\'' + file.name + '\\')">Delete</button>' +
                             '</div>' +
                         '</div>'
                     ).join('');
                 } catch (error) {
-                    document.getElementById('fileList').innerHTML = '<p class="empty">Error loading files. Check if Supabase keys are set in Render.</p>';
+                    document.getElementById('fileList').innerHTML = '<p class="empty">Error loading files. Check Render logs.</p>';
+                }
+            }
+
+            async function deleteFile(fileName) {
+                if (!confirm('Are you sure you want to delete ' + fileName + '?')) return;
+                
+                try {
+                    const response = await fetch('/api/files/' + encodeURIComponent(fileName), {
+                        method: 'DELETE'
+                    });
+                    
+                    if (response.ok) {
+                        // Hide the card immediately upon successful deletion
+                        document.getElementById('card-' + encodeURIComponent(fileName)).style.display = 'none';
+                    } else {
+                        alert('Failed to delete file.');
+                    }
+                } catch (error) {
+                    alert('Error deleting file: ' + error.message);
                 }
             }
             loadFiles();
