@@ -122,7 +122,7 @@ app.get('/', (req, res) => {
             .toolbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; padding-bottom: 10px; border-bottom: 1px solid #ddd; }
             .toolbar-left { display: flex; align-items: center; gap: 10px; }
             .toolbar-actions button { margin-left: 5px; }
-            .file-card { border: 1px solid #ddd; padding: 15px; margin-bottom: 10px; border-radius: 5px; display: flex; justify-content: space-between; align-items: center; }
+            .file-card { border: 1px solid #ddd; padding: 15px; margin-bottom: 10px; border-radius: 5px; display: flex; justify-content: space-between; align-items: center; animation: fadeIn 0.5s ease-in-out; }
             .file-info { display: flex; align-items: center; gap: 10px; }
             .file-info strong { font-size: 16px; color: #0056b3; word-break: break-all; }
             .btn { padding: 8px 15px; text-decoration: none; border-radius: 4px; color: white; font-size: 14px; margin-left: 5px; border: none; cursor: pointer; }
@@ -132,6 +132,7 @@ app.get('/', (req, res) => {
             .btn-bulk-delete { background: #dc3545; }
             .btn-bulk-download { background: #28a745; }
             .empty { text-align: center; color: #777; margin-top: 30px; }
+            @keyframes fadeIn { from { opacity: 0; transform: translateY(-5px); } to { opacity: 1; transform: translateY(0); } }
         </style>
     </head>
     <body>
@@ -156,43 +157,67 @@ app.get('/', (req, res) => {
         </div>
 
         <script>
+            let currentFiles = [];
+
             // Helper to update the counter badge
             function updateFileCount(count) {
                 document.getElementById('fileCount').innerText = count + (count === 1 ? ' file' : ' files');
             }
 
-            async function loadFiles() {
+            async function checkForUpdates() {
                 try {
                     const response = await fetch('/api/files');
-                    if (!response.ok) throw new Error('Network response was not ok');
+                    if (!response.ok) return;
                     const files = await response.json();
-                    const fileList = document.getElementById('fileList');
-                    
-                    // Update the counter immediately
-                    updateFileCount(files.length);
 
-                    if (files.length === 0) {
-                        fileList.innerHTML = '<p class="empty">No files uploaded yet.</p>';
-                        return;
+                    // Check if the list has changed before re-rendering to preserve checkbox states
+                    const newFileNames = files.map(f => f.name).join(',');
+                    const oldFileNames = currentFiles.map(f => f.name).join(',');
+
+                    if (newFileNames !== oldFileNames) {
+                        // Save currently checked items before re-rendering
+                        let checkedFilenames = new Set();
+                        document.querySelectorAll('.file-checkbox:checked').forEach(cb => {
+                            checkedFilenames.add(cb.value);
+                        });
+
+                        currentFiles = files;
+                        renderFiles(files);
+
+                        // Restore checked items
+                        document.querySelectorAll('.file-checkbox').forEach(cb => {
+                            if (checkedFilenames.has(cb.value)) {
+                                cb.checked = true;
+                            }
+                        });
                     }
-
-                    fileList.innerHTML = files.map(file => 
-                        '<div class="file-card" id="card-' + encodeURIComponent(file.name) + '">' +
-                            '<div class="file-info">' +
-                                '<input type="checkbox" class="file-checkbox" value="' + file.name + '" data-url="' + file.url + '">' +
-                                '<strong>' + file.name + '</strong>' +
-                            '</div>' +
-                            '<div class="actions">' +
-                                '<a href="' + file.url + '" target="_blank" class="btn btn-preview">Preview</a>' +
-                                '<a href="' + file.url + '" download="' + file.name + '" class="btn btn-download">Download</a>' +
-                                '<button class="btn btn-delete" onclick="deleteFile(\\'' + file.name + '\\')">Delete</button>' +
-                            '</div>' +
-                        '</div>'
-                    ).join('');
-                } catch (error) {
-                    document.getElementById('fileList').innerHTML = '<p class="empty">Error loading files. Check Render logs.</p>';
-                    updateFileCount(0);
+                } catch (e) {
+                    // Silently fail to avoid spamming console if network drops momentarily
                 }
+            }
+
+            function renderFiles(files) {
+                const fileList = document.getElementById('fileList');
+                updateFileCount(files.length);
+
+                if (files.length === 0) {
+                    fileList.innerHTML = '<p class="empty">No files uploaded yet.</p>';
+                    return;
+                }
+
+                fileList.innerHTML = files.map(file => 
+                    '<div class="file-card" id="card-' + encodeURIComponent(file.name) + '">' +
+                        '<div class="file-info">' +
+                            '<input type="checkbox" class="file-checkbox" value="' + file.name + '" data-url="' + file.url + '">' +
+                            '<strong>' + file.name + '</strong>' +
+                        '</div>' +
+                        '<div class="actions">' +
+                            '<a href="' + file.url + '" target="_blank" class="btn btn-preview">Preview</a>' +
+                            '<a href="' + file.url + '" download="' + file.name + '" class="btn btn-download">Download</a>' +
+                            '<button class="btn btn-delete" onclick="deleteFile(\\'' + file.name + '\\')">Delete</button>' +
+                        '</div>' +
+                    '</div>'
+                ).join('');
             }
 
             function toggleSelectAll(source) {
@@ -218,8 +243,9 @@ app.get('/', (req, res) => {
                     const response = await fetch('/api/files/' + encodeURIComponent(fileName), { method: 'DELETE' });
                     if (response.ok) {
                         const card = document.getElementById('card-' + encodeURIComponent(fileName));
-                        if (card) card.remove(); // Remove from DOM entirely
-                        recountVisibleFiles(); // Update counter
+                        if (card) card.remove();
+                        recountVisibleFiles();
+                        checkForUpdates(); // Immediately sync with server
                     } else {
                         alert('Failed to delete file.');
                     }
@@ -245,10 +271,11 @@ app.get('/', (req, res) => {
                     if (response.ok) {
                         selected.forEach(cb => {
                             const card = document.getElementById('card-' + encodeURIComponent(cb.value));
-                            if (card) card.remove(); // Remove from DOM entirely
+                            if (card) card.remove();
                         });
                         document.getElementById('selectAll').checked = false;
-                        recountVisibleFiles(); // Update counter
+                        recountVisibleFiles();
+                        checkForUpdates(); // Immediately sync with server
                     } else {
                         alert('Failed to delete files.');
                     }
@@ -274,7 +301,10 @@ app.get('/', (req, res) => {
                 });
             }
 
-            loadFiles();
+            // Initial load
+            checkForUpdates();
+            // Set polling interval to every 3 seconds
+            setInterval(checkForUpdates, 3000);
         </script>
     </body>
     </html>
