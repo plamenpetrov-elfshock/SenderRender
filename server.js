@@ -55,7 +55,7 @@ app.post('/upload', authenticateUpload, upload.single('file'), async (req, res) 
 // 2. Endpoint to list files for the web UI
 app.get('/api/files', async (req, res) => {
   try {
-    const { data, error } = await supabase.storage.from(BUCKET_NAME).list();
+    const { data, error } = await supabase.storage.from(BUCKET_NAME).list('', { limit: 1000, offset: 0 });
     if (error) throw error;
 
     const sortedFiles = data.reverse();
