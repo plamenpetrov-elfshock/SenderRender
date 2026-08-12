@@ -159,7 +159,6 @@ app.get('/', (req, res) => {
         <script>
             let currentFiles = [];
 
-            // Helper to update the counter badge
             function updateFileCount(count) {
                 document.getElementById('fileCount').innerText = count + (count === 1 ? ' file' : ' files');
             }
@@ -167,15 +166,16 @@ app.get('/', (req, res) => {
             async function checkForUpdates() {
                 try {
                     const response = await fetch('/api/files');
-                    if (!response.ok) return;
+                    if (!response.ok) {
+                        document.getElementById('fileList').innerHTML = '<p class="empty">Error loading files. Server returned ' + response.status + '.<br>(Is Render asleep?)</p>';
+                        return;
+                    }
                     const files = await response.json();
 
-                    // Check if the list has changed before re-rendering to preserve checkbox states
                     const newFileNames = files.map(f => f.name).join(',');
                     const oldFileNames = currentFiles.map(f => f.name).join(',');
 
                     if (newFileNames !== oldFileNames) {
-                        // Save currently checked items before re-rendering
                         let checkedFilenames = new Set();
                         document.querySelectorAll('.file-checkbox:checked').forEach(cb => {
                             checkedFilenames.add(cb.value);
@@ -184,7 +184,6 @@ app.get('/', (req, res) => {
                         currentFiles = files;
                         renderFiles(files);
 
-                        // Restore checked items
                         document.querySelectorAll('.file-checkbox').forEach(cb => {
                             if (checkedFilenames.has(cb.value)) {
                                 cb.checked = true;
@@ -192,7 +191,7 @@ app.get('/', (req, res) => {
                         });
                     }
                 } catch (e) {
-                    // Silently fail to avoid spamming console if network drops momentarily
+                    document.getElementById('fileList').innerHTML = '<p class="empty">Network error while loading files.</p>';
                 }
             }
 
@@ -230,10 +229,14 @@ app.get('/', (req, res) => {
                 return Array.from(checkboxes);
             }
 
-            // Recount visible files in the DOM
             function recountVisibleFiles() {
                 const visibleCards = document.querySelectorAll('.file-card').length;
                 updateFileCount(visibleCards);
+                
+                // If we just deleted the last file, show the empty message immediately
+                if (visibleCards === 0) {
+                    document.getElementById('fileList').innerHTML = '<p class="empty">No files uploaded yet.</p>';
+                }
             }
 
             async function deleteFile(fileName) {
@@ -245,7 +248,7 @@ app.get('/', (req, res) => {
                         const card = document.getElementById('card-' + encodeURIComponent(fileName));
                         if (card) card.remove();
                         recountVisibleFiles();
-                        checkForUpdates(); // Immediately sync with server
+                        checkForUpdates();
                     } else {
                         alert('Failed to delete file.');
                     }
@@ -275,7 +278,7 @@ app.get('/', (req, res) => {
                         });
                         document.getElementById('selectAll').checked = false;
                         recountVisibleFiles();
-                        checkForUpdates(); // Immediately sync with server
+                        checkForUpdates();
                     } else {
                         alert('Failed to delete files.');
                     }
@@ -303,8 +306,8 @@ app.get('/', (req, res) => {
 
             // Initial load
             checkForUpdates();
-            // Set polling interval to every 3 seconds
-            setInterval(checkForUpdates, 3000);
+            // Set polling interval to every 10 seconds (prevents Render/Supabase rate limits)
+            setInterval(checkForUpdates, 10000);
         </script>
     </body>
     </html>
